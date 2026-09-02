@@ -30,6 +30,7 @@ use crate::download::*;
 use crate::io::*;
 #[cfg(target_arch = "s390x")]
 use crate::s390x;
+use crate::live::OsFeatures;
 use crate::source::*;
 
 // Match the grub.cfg console settings commands in
@@ -786,6 +787,22 @@ fn apply_grub_console_commands(grub_cfg: &str, commands: &[String]) -> Result<St
 fn copy_network_config(mountpoint: &Path, net_config_src: &str) -> Result<()> {
     eprintln!("Copying networking configuration from {net_config_src}");
 
+    let features_path = mountpoint.join("coreos/features.json");
+    let features: OsFeatures = match std::fs::read(&features_path) {
+        Ok(data) => serde_json::from_slice(&data).context("parsing OS features")?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => OsFeatures::default(),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", features_path.display())),
+    };
+    eprintln!("DEBUG: features.initrd_copy_network = {}", features.initrd_copy_network);
+    eprintln!("DEBUG: features.live_initrd_network = {}", features.live_initrd_network);
+    eprintln!("DEBUG: features.installer_config = {}", features.installer_config);
+    if !features.initrd_copy_network {
+        bail!(
+            "This OS image does not support --copy-network via initramfs. \
+             Please use a newer OS image."
+        );
+    }
+
     let mut initrd = Initrd::default();
 
     let entries = fs::read_dir(net_config_src)
@@ -818,7 +835,6 @@ fn copy_network_config(mountpoint: &Path, net_config_src: &str) -> Result<()> {
 
     let (_, initrd_rel, _) = get_bls_info(mountpoint)?;
     let initrd_file = mountpoint.join(&initrd_rel[1..]);
-
     if !initrd_file.exists() {
         bail!("initramfs file not found at {:?}", initrd_file);
     }
